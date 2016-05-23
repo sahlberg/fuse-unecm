@@ -1,0 +1,72 @@
+Fuse-unecm is a read-only overlay filesystem to transparently uncompress
+indexed ECM files. This allows you to play ECM compressed disk images in
+your emulators without first having to uncompress them.
+
+(The index file is to make it possible to seek() in the compressed file
+without taking a huge performance hit.)
+
+This package comes with a utility to create an index : 'ecm-index'.
+
+
+ECM
+===
+ECM is a fileformat for compressed disk images. It works by removing the ~10%
+of a raw disk image that consists of checksums and redundancy codes that can
+be re-computed at run-time.
+This file format is commonly used for disk-images created for various emulators.
+This filesystem allow you to transparently uncompress such files at runtime.
+
+
+Compiling
+=========
+gcc -o fuse-unecm fuse-unecm.c libunecm.c -lfuse -ltdb
+gcc -o ecm-index ecm-index.c libunecm.c
+
+
+Create an index file
+====================
+ecm-index foo.bin.ecm
+
+Which will create the index file foo.bin.ecm.edi
+Create index files for all your ECM files!
+
+
+Mounting an overlay
+===================
+  fuse-unecm -m <directory>
+
+
+Unmouning the filesystem
+========================
+  fusermount  -u <directory>
+
+
+BGZIP
+=====
+This overlay filesystem works well together with the FUS-BGZIP filesystem
+Combining these two filesystems makes it possible to first compress the disk
+image with ECM-COMPRESS and then compress it even further with BGZIP.
+
+
+Example
+=======
+Assume we have a directory that contains a .bin.ecm file:
+
+  ls -l test
+  total 485548
+  -rw-rw-r-- 1 sahlberg sahlberg 497190410 Oct 24  2007 foo.bin.ecm
+  -rw-rw-r-- 1 sahlberg sahlberg    132267 Oct 24  2007 foo.bin.ecm.edi
+  -rw-rw-r-- 1 sahlberg sahlberg       114 Oct 24  2007 foo.cue
+
+Then mount fuse-unecm ontop of this directory:
+
+  fuse-unecm -m test
+
+And the result becomes:
+
+  ls -l test
+  total 485548
+  -rw-rw-r-- 1 sahlberg sahlberg 540962352 Oct 24  2007 foo.bin
+  -rw-rw-r-- 1 sahlberg sahlberg       114 Oct 24  2007 foo.cue
+
+And you can now point your emulator to foo.bin.
