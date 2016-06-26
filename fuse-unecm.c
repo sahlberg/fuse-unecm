@@ -44,6 +44,8 @@
 #include "libunecm.h"
 #include <tdb.h>
 
+#define discard_const(ptr) ((void *)((intptr_t)(ptr)))
+
 #define LOG(...) {                          \
         if (logfile) { \
             FILE *fh = fopen(logfile, "a+"); \
