@@ -62,6 +62,8 @@ struct file {
 
 static char *logfile;
 
+static struct tdb_context *tdb;
+
 /* descriptor for the underlying directory */
 static int dir_fd;
 
