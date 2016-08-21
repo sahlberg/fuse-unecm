@@ -39,6 +39,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/vfs.h>
 #include <unistd.h>
 
 #include "libunecm.h"
@@ -327,12 +328,18 @@ static int fuse_unecm_readdir(const char *path, void *buf,
         return 0;
 }
 
+static int fuse_unecm_statfs(const char *path, struct statvfs* stbuf)
+{
+        return fstatvfs(dir_fd, stbuf);
+}
+
 static struct fuse_operations unecm_oper = {
         .getattr        = fuse_unecm_getattr,
         .open           = fuse_unecm_open,
         .release        = fuse_unecm_release,
         .read           = fuse_unecm_read,
         .readdir        = fuse_unecm_readdir,
+        .statfs         = fuse_unecm_statfs,
 };
 
 static void print_usage(char *name)
@@ -373,6 +380,7 @@ int main(int argc, char *argv[])
                 NULL,
                 NULL,
         };
+        char fs_name[1024], fs_type[1024];
         
         while ((c = getopt_long(argc, argv, "?hal:m:", long_opts,
                     &opt_idx)) > 0) {
@@ -392,6 +400,12 @@ int main(int argc, char *argv[])
                         break;
                 }
         }
+
+        snprintf(fs_name, sizeof(fs_name), "-ofsname=%s", mnt);
+        fuse_unecm_argv[fuse_unecm_argc++] = fs_name;
+
+        snprintf(fs_type, sizeof(fs_type), "-osubtype=UNECM");
+        fuse_unecm_argv[fuse_unecm_argc++] = fs_type;
 
         if (mnt == NULL) {
                 fprintf(stderr, "-m was not specified.\n");
