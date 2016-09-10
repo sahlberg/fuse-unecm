@@ -294,6 +294,7 @@ struct ecm *ecm_open_file(int dir_fd, const char *file)
                 return NULL;
         }
 
+        ecm->unpacked_size = -1;
         ecm->fd = openat(dir_fd, file, 0);
         if (ecm->fd == -1) {
                 free(ecm);
@@ -342,20 +343,6 @@ struct ecm *ecm_open_file(int dir_fd, const char *file)
                 ecm->idx_data[2 * i + 1] = le64toh(ecm->idx_data[2 * i + 1]);
         }
         close(idx_fd);
-
-        // Find out what the uncompressed size is
-        ecm->unpacked_size = ecm->idx_data[2 * (ecm->idx_size -1)];
-        while (1) {
-                uint8_t buf[4096];
-                ssize_t count;
-
-                ecm_seek(ecm, ecm->unpacked_size);
-                count = ecm_read(ecm, buf, ecm->unpacked_size, 4096);
-                if (count == 0) {
-                        break;
-                }
-                ecm->unpacked_size += count;
-        }
 
         return ecm;
 }
@@ -495,5 +482,20 @@ ssize_t ecm_read(struct ecm *ecm, char *buf, off_t offset, size_t len)
 
 size_t ecm_get_file_size(struct ecm *ecm)
 {
+        if (ecm->unpacked_size == -1) {
+                // Find out what the uncompressed size is
+                ecm->unpacked_size = ecm->idx_data[2 * (ecm->idx_size -1)];
+                while (1) {
+                        uint8_t buf[4096];
+                        ssize_t count;
+
+                        ecm_seek(ecm, ecm->unpacked_size);
+                        count = ecm_read(ecm, buf, ecm->unpacked_size, 4096);
+                        if (count == 0) {
+                                break;
+                        }
+                        ecm->unpacked_size += count;
+                }
+        }
         return ecm->unpacked_size;
 }
