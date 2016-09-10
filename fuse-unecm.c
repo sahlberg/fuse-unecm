@@ -384,7 +384,7 @@ static void print_usage(char *name)
 {
         printf("Usage: %s [-?|--help] [-a|--allow-other] "
                "[-m|--mountpoint=mountpoint] "
-               "[-l|--logfile=<file> ", name);
+               "[-l|--logfile=<file> [-f|--foreground]", name);
         exit(0);
 }
 
@@ -397,6 +397,7 @@ int main(int argc, char *argv[])
         static struct option long_opts[] = {
                 { "help", no_argument, 0, '?' },
                 { "allow-other", no_argument, 0, 'a' },
+                { "foreground", no_argument, 0, 'f' },
                 { "logfile", required_argument, 0, 'l' },
                 { "mountpoint", required_argument, 0, 'm' },
                 { NULL, 0, 0, 0 }
@@ -422,7 +423,7 @@ int main(int argc, char *argv[])
         };
         char fs_name[1024], fs_type[1024];
         
-        while ((c = getopt_long(argc, argv, "?hal:m:", long_opts,
+        while ((c = getopt_long(argc, argv, "?hafl:m:", long_opts,
                     &opt_idx)) > 0) {
                 switch (c) {
                 case 'h':
@@ -431,6 +432,9 @@ int main(int argc, char *argv[])
                         return 0;
                 case 'a':
                         fuse_unecm_argv[fuse_unecm_argc++] = "-oallow_other";
+                        break;
+                case 'f':
+                        fuse_unecm_argv[fuse_unecm_argc++] = "-f";
                         break;
                 case 'l':
                         logfile = strdup(optarg);
