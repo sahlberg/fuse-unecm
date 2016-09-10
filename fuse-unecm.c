@@ -40,6 +40,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/vfs.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "libunecm.h"
@@ -47,13 +48,16 @@
 
 #define discard_const(ptr) ((void *)((intptr_t)(ptr)))
 
-#define LOG(...) {                          \
-        if (logfile) { \
-            FILE *fh = fopen(logfile, "a+"); \
-            fprintf(fh, "[UNECM] "); \
-            fprintf(fh, __VA_ARGS__); \
-            fclose(fh); \
-        } \
+#define LOG(...) {                                              \
+        if (logfile) {                                          \
+                FILE *fh = fopen(logfile, "a+");                \
+                time_t t = time(NULL);                          \
+                char tmp[256];                                  \
+                strftime(tmp, sizeof(tmp), "%T", localtime(&t));\
+                fprintf(fh, "[UNECM] %s ", tmp);                \
+                fprintf(fh, __VA_ARGS__);                       \
+                fclose(fh);                                     \
+        }                                                       \
 }
 
 struct file {
@@ -63,7 +67,8 @@ struct file {
 
 static char *logfile;
 
-static struct tdb_context *tdb;
+static struct tdb_context *nu_tdb;
+static struct tdb_context *filesize_tdb;
 
 /* descriptor for the underlying directory */
 static int dir_fd;
@@ -93,12 +98,14 @@ static int need_ecm_uncompress(const char *file) {
         LOG("NEED_ECM_UNCOMPRESS [%s]\n", file);
         key.dptr = discard_const(file);
         key.dsize = strlen(file);
-        data = tdb_fetch(tdb, key);
+        data = tdb_fetch(nu_tdb, key);
         if (data.dptr) {
                 uint8_t val = data.dptr[0];
                 free(data.dptr);
                 return val;
         }
+
+        LOG("NEED_ECM_UNCOMPRESS SLOW PATH [%s]\n", file);
 
         snprintf(stripped, PATH_MAX,"%s", file);
         if (strlen(stripped) > 4 &&
@@ -128,7 +135,7 @@ static int need_ecm_uncompress(const char *file) {
 finished:
         data.dptr = &ret;
         data.dsize = 1;
-        tdb_store(tdb, key, data, TDB_REPLACE);
+        tdb_store(nu_tdb, key, data, TDB_REPLACE);
         return ret;
 }
 
@@ -142,19 +149,23 @@ static int fuse_unecm_read(const char *path, char *buf, size_t size,
                 path++;
         }
 
+        LOG("READ [%s]\n", path);
+
         file = (void *)ffi->fh;
         if (file->ecm) {
                 ret = ecm_read(file->ecm, buf, offset, size);
                 if (ret == -1) {
-                        LOG("READ read [%s] %jd:%zu %s\n", path, offset, size, strerror(errno));
+                        LOG("READ ecm_read failed [%s] %jd:%zu %s\n",
+                            path, offset, size, strerror(errno));
                         return -errno;
                 }
-                LOG("READ [%s] %jd:%zu %d\n", path, offset, size, ret);
+                LOG("READ ECM [%s] %jd:%zu %d\n", path, offset, size, ret);
                 return ret;
         }
         
         /* Passthrough to underlying filesystem */
         ret = pread(file->fd, buf, size, offset);
+        LOG("READ underlying file [%s] %jd:%zu %d\n", path, offset, size, ret);
         return (ret == -1) ? -errno : ret;
 }
 
@@ -195,6 +206,8 @@ static int fuse_unecm_open(const char *path, struct fuse_file_info *ffi)
                 path++;
         }
 
+        LOG("OPEN [%s]\n", path);
+
         ret = fstatat(dir_fd, path, &st, AT_NO_AUTOMOUNT);
         if (ret && errno == ENOENT) {
                 if (need_ecm_uncompress(path)) {
@@ -204,7 +217,7 @@ static int fuse_unecm_open(const char *path, struct fuse_file_info *ffi)
                         file->ecm = ecm_open_file(dir_fd, tmp);
                         if (file->ecm == NULL) {
                                 free(file);
-                                LOG("Failed to open ECM [%s]\n", path);
+                                LOG("OPEN Failed to open ECM [%s]\n", path);
                                 return -ENOENT;
                         }
 
@@ -231,6 +244,20 @@ static off_t get_uncompressed_size(const char *path)
 {
         struct ecm *ecm;
         size_t pos;
+        TDB_DATA key, data;
+
+        LOG("GET_UNCOMPRESSED_SIZE [%s]\n", path);
+
+        key.dptr = discard_const(path);
+        key.dsize = strlen(path);
+        data = tdb_fetch(filesize_tdb, key);
+        if (data.dptr) {
+                off_t size = *(off_t *)data.dptr;
+                free(data.dptr);
+                return size;
+        }
+
+        LOG("GET_UNCOMPRESSED_SIZE SLOW PATH [%s]\n", path);
 
         ecm = ecm_open_file(dir_fd, path);
         if (ecm == NULL) {
@@ -240,12 +267,20 @@ static off_t get_uncompressed_size(const char *path)
         }
         pos = ecm_get_file_size(ecm);
         ecm_close_file(ecm);
+        LOG("GET_UNCOMPRESSED_SIZE [%s] %zu\n", path, pos);
+
+        data.dptr = (uint8_t *)&pos;
+        data.dsize = sizeof(pos);
+        tdb_store(filesize_tdb, key, data, TDB_REPLACE);
+
         return pos;
 }
 
 static int fuse_unecm_getattr(const char *path, struct stat *stbuf)
 {
         int ret;
+
+        LOG("GETATTR [%s]\n", path);
 
         if (path[0] == '/') {
                 path++;
@@ -260,7 +295,8 @@ static int fuse_unecm_getattr(const char *path, struct stat *stbuf)
                         snprintf(tmp, PATH_MAX, "%s.ecm", path);
                         ret = fstatat(dir_fd, tmp, stbuf, AT_NO_AUTOMOUNT);
                         if (ret) {
-                                LOG("GETATTR [%s] %s\n", path, strerror(errno));
+                                LOG("GETATTR fstatat failed [%s] %s\n",
+                                    path, strerror(errno));
                                 return -errno;
                         }
 
@@ -330,6 +366,8 @@ static int fuse_unecm_readdir(const char *path, void *buf,
 
 static int fuse_unecm_statfs(const char *path, struct statvfs* stbuf)
 {
+        LOG("STATFS [%s]\n", path);
+
         return fstatvfs(dir_fd, stbuf);
 }
 
@@ -353,6 +391,8 @@ static void print_usage(char *name)
 int main(int argc, char *argv[])
 {
         int c, ret = 0, opt_idx = 0;
+        char tdbdir[PATH_MAX];
+        char tdbfile[PATH_MAX];
         char *mnt = NULL;
         static struct option long_opts[] = {
                 { "help", no_argument, 0, '?' },
@@ -417,9 +457,21 @@ int main(int argc, char *argv[])
         dir_fd = open(mnt, O_DIRECTORY);
         fuse_unecm_argv[1] = mnt;
 
-        tdb = tdb_open(NULL, 10000001, TDB_INTERNAL, O_RDWR, 0);
-        if (tdb == NULL) {
-                printf("Failed to open TDB\n");
+        snprintf(tdbdir, sizeof(tdbdir), "%s/.fuse-unecm",
+                 getpwuid(getuid())->pw_dir);
+        mkdir(tdbdir, 0700);
+
+        nu_tdb = tdb_open(NULL, 10000001, TDB_INTERNAL, O_RDWR, 0);
+        if (nu_tdb == NULL) {
+                printf("Failed to open NEEDS-UNCOMPRESSION TDB\n");
+                exit(1);
+        }
+
+        snprintf(tdbfile, sizeof(tdbfile), "%s/file_size.tdb", tdbdir);
+        errno = 0;
+        filesize_tdb = tdb_open(tdbfile, 10000001, 0, O_CREAT|O_RDWR, 0600);
+        if (filesize_tdb == NULL) {
+                printf("Failed to open FILE-SIZE TDB : %s\n", strerror(errno));
                 exit(1);
         }
 
